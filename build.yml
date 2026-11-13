@@ -1,0 +1,293 @@
+name: build
+
+on:
+  push:
+    branches: ["**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Tulis file proyek
+        run: |
+          mkdir -p src/main/java/com/darkimpus src/main/resources src/main/resources/assets/darkimpus/lang src/main/resources/assets/darkimpus/models/item src/main/resources/assets/darkimpus/textures/item
+          cat > build.gradle <<'EOF_FILE'
+          plugins {
+              id 'fabric-loom' version '1.6-SNAPSHOT'
+              id 'maven-publish'
+          }
+
+          version = project.mod_version
+          group = project.maven_group
+
+          base {
+              archivesName = project.archives_base_name
+          }
+
+          repositories {
+          }
+
+          dependencies {
+              minecraft "com.mojang:minecraft:${project.minecraft_version}"
+              mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
+              modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
+              modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+          }
+
+          processResources {
+              inputs.property "version", project.version
+
+              filesMatching("fabric.mod.json") {
+                  expand "version": project.version
+              }
+          }
+
+          tasks.withType(JavaCompile).configureEach {
+              it.options.release = 17
+          }
+
+          java {
+              withSourcesJar()
+              sourceCompatibility = JavaVersion.VERSION_17
+              targetCompatibility = JavaVersion.VERSION_17
+          }
+          EOF_FILE
+          cat > settings.gradle <<'EOF_FILE'
+          pluginManagement {
+              repositories {
+                  maven {
+                      name = 'Fabric'
+                      url = 'https://maven.fabricmc.net/'
+                  }
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          EOF_FILE
+          cat > gradle.properties <<'EOF_FILE'
+          org.gradle.jvmargs=-Xmx1G
+          org.gradle.parallel=true
+
+          minecraft_version=1.20.1
+          yarn_mappings=1.20.1+build.10
+          loader_version=0.15.11
+
+          mod_version=1.0.0
+          maven_group=com.darkimpus
+          archives_base_name=darkimpus
+
+          fabric_version=0.92.2+1.20.1
+          EOF_FILE
+          cat > src/main/resources/fabric.mod.json <<'EOF_FILE'
+          {
+            "schemaVersion": 1,
+            "id": "darkimpus",
+            "version": "${version}",
+            "name": "Dark Impus",
+            "description": "Senjata dark fantasy untuk server roleplay.",
+            "authors": ["DarkImpus"],
+            "environment": "*",
+            "entrypoints": {
+              "main": ["com.darkimpus.DarkImpusMod"]
+            },
+            "depends": {
+              "fabricloader": ">=0.15.0",
+              "minecraft": "~1.20.1",
+              "java": ">=17",
+              "fabric-api": "*"
+            }
+          }
+          EOF_FILE
+          cat > src/main/resources/assets/darkimpus/lang/en_us.json <<'EOF_FILE'
+          {
+            "item.darkimpus.dark_impus": "Dark Impus"
+          }
+          EOF_FILE
+          cat > src/main/resources/assets/darkimpus/models/item/dark_impus.json <<'EOF_FILE'
+          {
+            "parent": "minecraft:item/handheld",
+            "textures": {
+              "layer0": "darkimpus:item/dark_impus"
+            }
+          }
+          EOF_FILE
+          cat > src/main/java/com/darkimpus/DarkImpusMod.java <<'EOF_FILE'
+          package com.darkimpus;
+
+          import net.fabricmc.api.ModInitializer;
+          import net.fabricmc.fabric.api.item.v1.FabricItemSettings;
+          import net.fabricmc.fabric.api.itemgroup.v1.ItemGroupEvents;
+          import net.minecraft.item.Item;
+          import net.minecraft.item.ItemGroups;
+          import net.minecraft.registry.Registries;
+          import net.minecraft.registry.Registry;
+          import net.minecraft.util.Identifier;
+          import net.minecraft.util.Rarity;
+
+          public class DarkImpusMod implements ModInitializer {
+              public static final String MOD_ID = "darkimpus";
+
+              public static final Item DARK_IMPUS = Registry.register(
+                      Registries.ITEM,
+                      new Identifier(MOD_ID, "dark_impus"),
+                      new DarkImpusSword(new FabricItemSettings().rarity(Rarity.EPIC).fireproof())
+              );
+
+              @Override
+              public void onInitialize() {
+                  ItemGroupEvents.modifyEntriesEvent(ItemGroups.COMBAT).register(entries -> entries.add(DARK_IMPUS));
+              }
+          }
+          EOF_FILE
+          cat > src/main/java/com/darkimpus/DarkImpusSword.java <<'EOF_FILE'
+          package com.darkimpus;
+
+          import java.util.List;
+
+          import net.minecraft.client.item.TooltipContext;
+          import net.minecraft.entity.LivingEntity;
+          import net.minecraft.entity.effect.StatusEffectInstance;
+          import net.minecraft.entity.effect.StatusEffects;
+          import net.minecraft.entity.player.PlayerEntity;
+          import net.minecraft.item.ItemStack;
+          import net.minecraft.item.Items;
+          import net.minecraft.item.SwordItem;
+          import net.minecraft.item.ToolMaterial;
+          import net.minecraft.particle.ParticleTypes;
+          import net.minecraft.recipe.Ingredient;
+          import net.minecraft.server.world.ServerWorld;
+          import net.minecraft.sound.SoundCategory;
+          import net.minecraft.sound.SoundEvents;
+          import net.minecraft.text.Text;
+          import net.minecraft.util.Formatting;
+          import net.minecraft.util.Hand;
+          import net.minecraft.util.TypedActionResult;
+          import net.minecraft.util.math.Box;
+          import net.minecraft.util.math.Vec3d;
+          import net.minecraft.world.World;
+          import org.jetbrains.annotations.Nullable;
+
+          public class DarkImpusSword extends SwordItem {
+
+              public DarkImpusSword(Settings settings) {
+                  // damage total = 1 (tangan) + 4 (material) + 3 = 8, kecepatan serang 1.6
+                  super(DarkMaterial.INSTANCE, 3, -2.4f, settings);
+              }
+
+              // EFEK SENJATA: dipanggil tiap kali pedang memukul musuh
+              @Override
+              public boolean postHit(ItemStack stack, LivingEntity target, LivingEntity attacker) {
+                  if (attacker.getWorld() instanceof ServerWorld serverWorld) {
+                      target.addStatusEffect(new StatusEffectInstance(StatusEffects.WITHER, 100, 1), attacker);
+                      attacker.heal(1.0f); // curi nyawa
+                      serverWorld.spawnParticles(ParticleTypes.SOUL,
+                              target.getX(), target.getBodyY(0.5), target.getZ(),
+                              12, 0.3, 0.4, 0.3, 0.02);
+                  }
+                  return super.postHit(stack, target, attacker);
+              }
+
+              // SKILL: klik kanan = Gelombang Kegelapan (cooldown 5 detik)
+              @Override
+              public TypedActionResult<ItemStack> use(World world, PlayerEntity user, Hand hand) {
+                  ItemStack stack = user.getStackInHand(hand);
+
+                  if (user.getItemCooldownManager().isCoolingDown(this)) {
+                      return TypedActionResult.fail(stack);
+                  }
+
+                  if (world instanceof ServerWorld serverWorld) {
+                      // dash ke depan
+                      Vec3d look = user.getRotationVec(1.0f);
+                      user.addVelocity(look.x * 1.2, 0.25, look.z * 1.2);
+                      user.velocityModified = true;
+
+                      // serang semua makhluk di sekitar
+                      Box area = user.getBoundingBox().expand(4.0);
+                      List<LivingEntity> targets = world.getEntitiesByClass(
+                              LivingEntity.class, area, e -> e != user && e.isAlive());
+                      for (LivingEntity target : targets) {
+                          target.damage(world.getDamageSources().playerAttack(user), 6.0f);
+                          target.addStatusEffect(new StatusEffectInstance(StatusEffects.SLOWNESS, 60, 1), user);
+                          target.addStatusEffect(new StatusEffectInstance(StatusEffects.WITHER, 60, 0), user);
+                      }
+
+                      serverWorld.spawnParticles(ParticleTypes.SCULK_SOUL,
+                              user.getX(), user.getY() + 1.0, user.getZ(),
+                              40, 1.5, 0.5, 1.5, 0.05);
+                      world.playSound(null, user.getBlockPos(), SoundEvents.ENTITY_WITHER_SHOOT,
+                              SoundCategory.PLAYERS, 1.0f, 0.8f);
+
+                      user.getItemCooldownManager().set(this, 100); // 100 tick = 5 detik
+                      stack.damage(2, user, p -> p.sendToolBreakStatus(hand));
+                  }
+
+                  return TypedActionResult.success(stack, world.isClient());
+              }
+
+              @Override
+              public void appendTooltip(ItemStack stack, @Nullable World world, List<Text> tooltip, TooltipContext context) {
+                  tooltip.add(Text.literal("Serang: Kutukan Wither + curi nyawa").formatted(Formatting.DARK_PURPLE));
+                  tooltip.add(Text.literal("Klik kanan: Gelombang Kegelapan (5 detik)").formatted(Formatting.GRAY));
+              }
+
+              public enum DarkMaterial implements ToolMaterial {
+                  INSTANCE;
+
+                  @Override
+                  public int getDurability() {
+                      return 1800;
+                  }
+
+                  @Override
+                  public float getMiningSpeedMultiplier() {
+                      return 8.0f;
+                  }
+
+                  @Override
+                  public float getAttackDamage() {
+                      return 4.0f;
+                  }
+
+                  @Override
+                  public int getMiningLevel() {
+                      return 4;
+                  }
+
+                  @Override
+                  public int getEnchantability() {
+                      return 20;
+                  }
+
+                  @Override
+                  public Ingredient getRepairIngredient() {
+                      return Ingredient.ofItems(Items.NETHERITE_INGOT);
+                  }
+              }
+          }
+          EOF_FILE
+          base64 -d > src/main/resources/assets/darkimpus/textures/item/dark_impus.png <<'EOF_FILE'
+          iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAASklEQVR4nGNgoABMy7vzn2yNbsoVlGlW5rch3YBRzbTWvG+aEVwh2TbDDCHb2eguIRnoyoj9J9sQmGayXIKumSRQIadBvmYGBgYAFmZOvMOkv9cAAAAASUVORK5CYII=
+          EOF_FILE
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: "8.8"
+      - name: Build
+        run: gradle build
+      - uses: actions/upload-artifact@v4
+        with:
+          name: darkimpus-mod
+          path: build/libs/darkimpus-1.0.0.jar
+      - name: Buat release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "v1.0.${{ github.run_number }}" build/libs/darkimpus-1.0.0.jar --repo "${{ github.repository }}" --target "${{ github.sha }}" --title "Dark Impus build ${{ github.run_number }}" --notes "Mod Dark Impus untuk Fabric 1.20.1"
